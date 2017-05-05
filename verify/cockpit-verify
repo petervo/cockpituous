@@ -4,6 +4,9 @@ set -ex
 
 if [ -n "$TMPDIR" ]; then
     mkdir -p "$TMPDIR"
+    mkdir -p $TMPDIR/libvirt
+    rm -rf /tmp/libvirt
+    ln -snf $TMPDIR/libvirt /tmp/libvirt
 fi
 
 if [ ! -d cockpit ]; then
@@ -22,13 +25,10 @@ echo "Starting testing"
 while true; do
     fail=0
     find cockpit -name '*.py?' -delete
-    git -C cockpit fetch origin master
-    git -C cockpit reset --hard FETCH_HEAD
+    git -C cockpit fetch origin
+    git -C cockpit reset --hard origin/master
     cockpit/test/vm-download --prune
     if ! cockpit/test/github-task "$@"; then
-        fail=1
-    fi
-    if [ $fail != 0 ]; then
-        sleep 60
+        exit
     fi
 done

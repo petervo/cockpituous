@@ -1,48 +1,27 @@
 #!/usr/bin/env python
 
+from __future__ import print_function
+
 # Rough configuration file follows, place it in ~/.config/sink
 
-DEFAULTS = """
+# PruneInterval [days] defaults to 0 (disabled)
+DEFAULTS = u"""
 [Sink]
 Url: http://%(user)s.fedorapeople.org/logs/%(identifier)s/log
 Logs: ~/public_html/logs
+PruneInterval: 0
 
 [Irc]
 Server: chat.freenode.net:6667
 Login: %(user)sbot %(user)sbot %(user)sbot
 Nick: %(user)sbot
-
-[Badges]
-Location: ~/public_html/status/
 """
 
 TOKEN = "~/.config/github-token"
 
-BADGE_TEMPLATE = """\
-<svg xmlns="http://www.w3.org/2000/svg" width="220" height="20">
-  <linearGradient id="b" x2="0" y2="100%">
-    <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
-    <stop offset="1" stop-opacity=".1"/>
-  </linearGradient>
-  <mask id="a">
-    <rect width="220" height="20" rx="3" fill="#fff"/>
-  </mask>
-  <g mask="url(#a)">
-    <path fill="#555" d="M0 0h150v20H0z"/>
-    <path fill="{color}" d="M150 0h70v20h-70z"/>
-  </g>
-  <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11">
-    <text x="75" y="15" fill="#010101" fill-opacity=".3">{description}</text>
-    <text x="75" y="14">{description}</text>
-    <text x="185" y="15" fill="#010101" fill-opacity=".3">{status}</text>
-    <text x="185" y="14">{status}</text>
-  </g>
-</svg>
-"""
-
 import argparse
 import errno
-import httplib
+import fcntl
 import json
 import os
 import select
@@ -52,21 +31,43 @@ import string
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
-import urlparse
-import urllib
 import re
 
-import ConfigParser
-import StringIO
+# Try Python 3, fail back to Python 2
+try:
+    from http.client import HTTPSConnection
+except ImportError:
+    from httplib import HTTPSConnection
+try:
+    from urllib.parse import urljoin
+except ImportError:
+    from urlparse import urljoin
+try:
+    from urllib.request import urlretrieve
+except ImportError:
+    from urllib import urlretrieve
+try:
+    from configparser import SafeConfigParser
+except ImportError:
+    from ConfigParser import SafeConfigParser
+try:
+    from io import StringIO
+except ImportError:
+    from cStringIO import StringIO
+try:
+    MAX_BUFF_SIZE = sys.maxsize
+except:
+    MAX_BUFF_SIZE = sys.maxint
+
 
 class GitHubClassic(object):
     def __init__(self, config):
         self.token = None
         try:
-            gt = open(os.path.expanduser(TOKEN), "r")
-            self.token = gt.read().strip()
-            gt.close()
+            with open(os.path.expanduser(TOKEN), "r") as gt:
+                self.token = gt.read().strip()
         except IOError as exc:
             if exc.errno == errno.ENOENT:
                  pass
@@ -86,7 +87,7 @@ class GitHubClassic(object):
         headers = {"Content-type": "application/json", "User-Agent": "Cockpit Tests" }
         if self.token:
             headers["Authorization"] = "token " + self.token
-        conn = httplib.HTTPSConnection("api.github.com", strict=True)
+        conn = HTTPSConnection("api.github.com", strict=True)
         # conn.set_debuglevel(1)
         conn.request("POST", resource, json.dumps(data), headers)
         response = conn.getresponse()
@@ -125,13 +126,23 @@ def expand(val, env):
 
 class GitHub(object):
     def __init__(self, config):
+        self.token = None
+        try:
+            with open(os.path.expanduser(TOKEN), "r") as gt:
+                self.token = gt.read().strip()
+        except IOError as exc:
+            if exc.errno == errno.ENOENT:
+                 pass
+            else:
+                raise
         self.results = { }
 
     def req(self, token, method, resource, data):
+        token = token or self.token
         headers = {"Content-type": "application/json", "User-Agent": "Cockpit Tests" }
         if token:
             headers["Authorization"] = "token " + token
-        conn = httplib.HTTPSConnection("api.github.com", strict=True)
+        conn = HTTPSConnection("api.github.com", strict=True)
         # conn.set_debuglevel(1)
         conn.request(method, resource, json.dumps(data), headers)
         response = conn.getresponse()
@@ -144,7 +155,7 @@ class GitHub(object):
 
     def push(self, status):
         github = status.get("github", { })
-        token = github.get("token", None)
+        token = github.get("token", self.token)
         requests = github.get("requests", None)
 
         if not token or not requests:
@@ -209,7 +220,6 @@ class Irc(object):
                     buf += data
                 elif fd == ircf:
                     data = ircf.recv(2048)
-                    # print >> sys.stderr, data
                     if "PING :" in data:
                         ircf.sendall("PONG :pingis\n")
                     if "ERROR :" in data:
@@ -264,32 +274,6 @@ def write_new(path, content):
     with open(path, 'wb') as f:
         f.write(content)
 
-class Badger(object):
-    def __init__(self, config):
-        self.location = os.path.expanduser(config.get("Badges", "Location"))
-        self.template = BADGE_TEMPLATE
-        self.colors = { 'passed': '#44cc11',
-                        'failed': '#e05d44' }
-        if not os.path.exists(self.location):
-            os.makedirs(self.location)
-
-    def push(self, data):
-        if 'badge' in data and 'name' in data['badge']:
-            badge = data['badge']
-            name = badge['name']
-            description = badge.get('description', "unknown")
-            status = badge.get('status', 'unknown')
-            status_text = badge.get('status-text', status)
-            if status in self.colors:
-                color = self.colors[status]
-            else:
-                color = '#9f9f9f'
-            content = self.template.format(description=description, status=status_text, color=color)
-            write_new(os.path.join(self.location, name + ".svg"),
-                      content)
-            write_new(os.path.join(self.location, name + ".html"),
-                      '<html><head><meta http-equiv="refresh" content="0; {url}"></head></html>'.format(url=data['link']))
-
 class Extras(object):
     def __init__(self, config):
         pass
@@ -297,18 +281,17 @@ class Extras(object):
     def push(self, data):
         if 'extras' in data:
             for url in data['extras']:
-                urllib.urlretrieve(url, os.path.basename(url))
-            del data['extras']
+                urlretrieve(url, os.path.basename(url))
 
 class Status(object):
     def __init__(self, config, identifier):
-        self.reporters = [ GitHubClassic(config), GitHub(config), Irc(config), Badger(config), Extras(config) ]
+        self.reporters = [ GitHubClassic(config), GitHub(config), Irc(config), Extras(config) ]
         self.link = config.get("Sink", "Url").replace('@@', identifier)
         self.data = None
 
     def push(self, data, log):
         if "link" in data:
-            data["link"] = urlparse.urljoin(self.link, data["link"], True)
+            data["link"] = urljoin(self.link, data["link"], True)
         else:
             data["link"] = self.link
         for reporter in self.reporters:
@@ -349,8 +332,6 @@ class Status(object):
                 if "github" in data and "status" in data["github"]:
                     data["github"]["status"]["state"] = "error"
                     data["github"]["status"]["description"] = "Aborted without status"
-                    if "badge" in data:
-                        data["badge"]["status"] = "error"
         self.push(data, log)
         with open("status", "w") as fp:
             clean_data = data
@@ -361,14 +342,18 @@ class Status(object):
         return used
 
 class Buffer(object):
+
     def __init__(self, fd):
         self.fd = fd
         self.buf = ''
+
     def push(self, piece):
         self.buf = piece + self.buf
+
     def readall(self):
-        self.read(sys.maxint)
-    def read(self, n=sys.maxint):
+        self.read(MAX_BUFF_SIZE)
+
+    def read(self, n=MAX_BUFF_SIZE):
         result = self.buf
         self.buf = ''
         while len(result) < n:
@@ -378,6 +363,7 @@ class Buffer(object):
                 break
             result += data
         return result
+
     def readone(self):
         result = self.buf
         self.buf = ''
@@ -386,6 +372,10 @@ class Buffer(object):
 
 # Create the directory in a race free way
 def mkdir_and_chdir(base, identifier):
+    # make sure the base exists
+    if not os.path.exists(base):
+        os.makedirs(base)
+
     directory = os.path.abspath(os.path.join(base, identifier))
 
     # 1. Create a temporary non-empty directory and get its handle
@@ -412,28 +402,108 @@ def mkdir_and_chdir(base, identifier):
     os.fchmod(dirfd, 0o755)
     os.close(dirfd)
 
+def prune_logs(base_path=".", dry_run=False):
+    """ Check all subdirectories of the current path and delete the ones that
+        are either empty or contain only files older than the age threshold.
+
+        For dry runs, print(the name of the directory instead.
+    """
+    reference_time = time.time()
+    age_threshold = 30
+    entries = os.listdir(base_path)
+    for entry in entries:
+        path = os.path.join(base_path, entry)
+
+        # skip non-directories
+        if not os.path.isdir(path):
+            continue
+
+        # if anything goes wrong, just skip and delete nothing
+        # this can happen for instance if some other log process changes dir content while we're pruning
+        try:
+            # initialize to threshold so empty dirs will be deleted
+            last_modified = 0
+            # use the last modified time of the logfile itself, not just the directory
+            for root, dirs, files in os.walk(path):
+                for filename in files:
+                    last_modified = max(last_modified, os.stat(os.path.join(root, filename)).st_mtime)
+
+            diff_days = (reference_time - last_modified) / (60*60*24)
+
+            # keep anything newer than 30 days old
+            if diff_days < age_threshold:
+                continue
+
+            if dry_run:
+                sys.stderr.write("Pruning {0} (age: {1} days)\n".format(path, int(round(diff_days))))
+            else:
+                shutil.rmtree(path)
+        except:
+            continue
+
+def check_prune(config, logs, dry_run):
+    """ See if we have to prune logs, and if we should, fork and do so
+        If the main process (log sink) exits before pruning is done,
+        the pruning process will be killed. This isn't critical since
+        pruning can just resume once the next PruneInterval has elapsed.
+    """
+    prune_interval = float(config.get("Sink", "PruneInterval"))
+    if prune_interval > 0:
+        status_file = os.path.join(logs, ".prune")
+        prune_now = True
+        # use the last modified time of the logfile itself, not just the directory
+        if os.path.isfile(status_file):
+            reference_time = time.time()
+            last_modified = os.stat(status_file).st_mtime
+            diff_days = (reference_time - last_modified) / (60*60*24)
+            prune_now = diff_days >= prune_interval
+
+        # if we should prune, fork so we don't block the sink
+        if prune_now:
+            if not os.path.isdir(logs):
+                sys.stderr.write("warning: log directory {0} doesn't exist, nothing to do\n".format(logs))
+            elif os.fork() == 0:
+                # update the file for writing and lock it (prevent concurrent pruning)
+                fd = os.open(status_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_NB | fcntl.LOCK_EX)
+                except IOError as ex:
+                    os.close(fd)
+                    print("can't lock, bailing out")
+                    sys.stderr.write("Unable to lock log pruning status file: {0}\n".format(status_file))
+                    sys.exit(0)
+
+                os.chdir(logs)
+                prune_logs(logs, dry_run)
+                sys.exit(0)
+
 def main():
     parser = argparse.ArgumentParser(description="Sink logs from distributed processes")
+    parser.add_argument('-d', '--dry-run', dest='dry_run', action="store_true", help='Applies only to pruning: do not delete logs')
     parser.add_argument("identifier", nargs=1)
     parser.set_defaults(verbosity=1)
     args = parser.parse_args()
-
-    valid_chars = "-_.%s%s" % (string.ascii_letters, string.digits, )
-    identifier = "".join([c if c in valid_chars else '-' for c in args.identifier[0]])
-    if not identifier or identifier != args.identifier[0]:
-        parser.error("not a valid log identifier: " + identifier)
 
     # Load up configuration if available
     try:
         user = os.environ.get("LOGNAME", os.getlogin())
     except:
         user = os.environ.get("LOGNAME", None)
-    config = ConfigParser.SafeConfigParser({ "user": user, "identifier": "@@" })
-    config.readfp(StringIO.StringIO(DEFAULTS))
+    config = SafeConfigParser({ "user": user, "identifier": "@@" })
+    config.readfp(StringIO(DEFAULTS))
     config.read([ os.path.expanduser("~/.config/sink") ])
 
     # Create the directory and chdir
     logs = os.path.expanduser(config.get("Sink", "Logs"))
+
+    # See if we have to prune logs
+    check_prune(config, logs, args.dry_run)
+
+    valid_chars = "-_.%s%s" % (string.ascii_letters, string.digits, )
+    identifier = "".join([c if c in valid_chars else '-' for c in args.identifier[0]])
+    if not identifier or identifier != args.identifier[0]:
+        parser.error("not a valid log identifier: " + identifier)
+
     mkdir_and_chdir(logs, identifier)
 
     # Initialize status reporters
