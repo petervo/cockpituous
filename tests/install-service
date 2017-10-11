@@ -1,0 +1,36 @@
+#!/bin/sh
+
+set -eufx
+
+SECRETS=/var/lib/cockpit-tests/secrets
+CACHE=/var/cache/cockpit-tests
+
+mkdir -p $SECRETS $CACHE
+chown -R 1111:1111 $SECRETS $CACHE
+
+cat <<EOF > /etc/systemd/system/cockpit-tests.service
+[Unit]
+Description=Cockpit Verify
+Requires=docker.service
+After=docker.service
+
+[Service]
+Environment="TEST_JOBS=4"
+Environment="TEST_CACHE=$CACHE"
+Environment="TEST_SECRETS=$SECRETS"
+Environment="TEST_PUBLISH=sink"
+Restart=always
+RestartSec=60
+ExecStart=/bin/sh -xc "/usr/bin/docker run --name=cockpit-tests --volume=\$TEST_CACHE:/cache:rw --volume=\$TEST_SECRETS:/secrets:ro --uts=host --privileged --env=TEST_OS=\"\$TEST_OS\" --env=TEST_JOBS=\"\$TEST_JOBS\" --env=TEST_PUBLISH=\"\$TEST_PUBLISH\" cockpit/tests"
+ExecStop=-/bin/sh -xc "/usr/bin/docker rm -f cockpit-tests"
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+
+echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666"' > /etc/udev/rules.d/80-kvm.rules
+echo "options kvm-intel nested=1" > /etc/modprobe.d/kvm-intel.conf
+echo "options kvm-amd nested=1" > /etc/modprobe.d/kvm-amd.conf
+( rmmod kvm-intel && modprobe kvm-intel ) || ( rmmod kvm-amd && modprobe kvm-amd )

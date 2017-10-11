@@ -1,6 +1,6 @@
 # Logging and Status Sink
 
-This is a logging and status sink for Cockpit continous integration and delivery.
+This is a logging and status sink for Cockpit continuous integration and delivery.
 
 It is a standalone python script. No other dependencies are required. Copy it
 to the home directory (or default login directory) of the public location where
@@ -45,7 +45,6 @@ services like IRC or GitHub. The following fields might be present:
  * `"onaborted"`: the status to process upon abortion
  * `"notify"`: message to send to IRC
  * `"github"`: object containing GitHub status info
- * `"badge"`: for updating badges
  * `"link"`: the link to the status message
  * `"extras"`: for putting extra files into the log directory
 
@@ -82,7 +81,7 @@ Each request can have the following fields:
 
 The `"token"`, `"requests"`, and `"resource"` fields are mandatory.
 
-The `"resource"` and `"data"` values will be expanded.  Any occurance
+The `"resource"` and `"data"` values will be expanded.  Any occurrence
 of ":path" is replaced with a value from a previous request.  The
 'path' is a sequence of names, separated by "." characters.  The first
 name is looked up among all the named results of previous requests,
@@ -120,28 +119,33 @@ current log.
 
 You can use results from the initial status in the final status.
 
-### Badge format
+One can also setup an "watches" section in the GitHub status. This
+is a section where the sink will perform the request(s) after 60 seconds
+and check on the results. If the result is not as expected, the sink
+will abort. This is used to prevent collisions or stop in progress
+tasks.
 
-The `"badge"` part of a status object has the following fields:
+    {
+        "github": {
+            "token": ".......",
+            "watches": [{
+                "method": "GET",
+                "resource": ":repos/statuses/abcdef01234",
+                "result": [
+                    {
+                        "context": "verify/fedora-25",
+                        "state": "pending",
+                        "description": "Testing in progress [host]"
+                    }
+                ]
+            }]
+        }
+    }
 
- * `"name"`: The base filename of the badge file.
- * `"description"`: A short description of the thing that the badge is for.
- * `"status"`: A symbolic status of the thing, see below.
- * `"status-text"`: A short description of the status.
-
-The full name of the badge is `<dir>/<name>.svg` where <dir> comes
-from the `[Badges] Location` configuration item of the sink, and
-<name> comes from the status object.  By default, badges are placed
-into `~/public_html/status/`
-
-The badge itself is a small image that includes `description` and
-`status-text`, with a color determined by `status`.  `status` can be
-one of "passed", "failed", or "error".  If `status-text` is omitted,
-`status` is used instead.
 
 ### Link field
 
-The `"link"` field will be automitically filled in by the sink. If it
+The `"link"` field will be automatically filled in by the sink. If it
 is specified in the status JSON object, that the specified link will
 take precedence. If a relative link is specified, it will be relative
 to the URL that the sink would have used.

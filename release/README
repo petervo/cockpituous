@@ -1,3 +1,18 @@
+# Release Scripts
+
+The various release scripts are present in this directory. They are mostly
+meant to be reusable in standalone fashion, with as little logical input
+and interdependency as possible.
+
+Some notable scripts:
+
+ * release-source: Builds a tarball and patches from a git repository
+ * release-srpm: Builds a source rpm from a tarball, patches and spec file
+
+The scripts can be run by the release-runner script in such a way that
+they all prepare their steps, and then commit them after everything has
+been prepared.
+
 # Cockpit Release Runner
 
 This is the container for the Cockpit release runner.
@@ -11,7 +26,7 @@ First get the container:
 Setup a 'cockpit' user:
 
     # groupadd -g 1111 -r cockpit && useradd -r -g cockpit -u 1111 cockpit
-    # mkdir -p /home/cockpit/.ssh /home/cockpit/.config
+    # mkdir -p /home/cockpit/.ssh /home/cockpit/.config /home/cockpit/release
     # chown cockpit:cockpit /home/cockpit
 
 Fill in the following files with valid credentials able to post logs to sink and
@@ -21,13 +36,14 @@ update github status:
     /home/cockpit/.ssh/id_rsa.pub
     /home/cockpit/.ssh/known_hosts
     /home/cockpit/.config/bodhi-user
-    /home/cockpit/.config/bodhi-password
     /home/cockpit/.config/copr
     /home/cockpit/.config/github-token
     /home/cockpit/.config/github-whitelist
+    /home/cockpit/.fedora-password
     /home/cockpit/.fedora.cert
     /home/cockpit/.fedora-server-ca.cert
     /home/cockpit/.gitconfig
+    /home/cockpit/.gnupg
 
 Get the service file. Edit it before installing it. Set the TEST_OS.
 Then install it and run it:

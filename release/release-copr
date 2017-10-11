@@ -13,9 +13,7 @@
 #                                   branch without failing delivery.
 # -p srpm    RELEASE_SRPM=srpm      Path to SRPM
 # -q         RELEASE_QUIET=1        Make output more quiet
-# -x         RELEASE_TRANSACTION=1  SIGSTOP before pushing the dist-git commit
 # -v         RELEASE_VERBOSE=1      Make output more verbose
-# -z         RELEASE_CHECK=1        Check credentials only
 #
 
 set -euf
@@ -26,7 +24,7 @@ CHECK=${RELEASE_CHECK:-0}
 QUIET=${RELEASE_QUIET:-0}
 CONTINUE=${RELEASE_CONTINUE:-0}
 VERBOSE=${RELEASE_VERBOSE:-0}
-SRPM=${RELEASE_SRPM:-$PWD/srpm}
+SRPM=${RELEASE_SRPM:-}
 COPR=${RELEASE_COPR:-}
 
 # Other globals
@@ -50,15 +48,35 @@ message()
     echo "release-copr: $@" >&2
 }
 
-readlink_or()
+readpath_or()
 {
-    if ! readlink "$1"; then
+    if ! realpath "$1"; then
         echo "$1"
+    fi
+}
+
+check_config() {
+    local expiration
+
+    trace "Validating ~/.config/copr"
+    if [ ! -e ~/.config/copr ]; then
+        message "~/.config/copr does not exist"
+        exit 1
+    fi
+    expiration=$(sed -n '/# expiration/ { s/^.*:[[:space:]]*//; p }' ~/.config/copr)
+    if [ -z "$expiration" ]; then
+        message "~/.config/copr does not contain expiration date"
+        exit 1
+    fi
+    if [ $(date +%s) -ge $(date -d"$expiration" +%s) ]; then
+        message "~/.config/copr is expired, please renew"
+        exit 1
     fi
 }
 
 check()
 {
+    check_config
     copr-cli list
     ssh fedorapeople.org -- mkdir -p public_html
 }
@@ -67,10 +85,12 @@ prepare()
 {
     local spec tmpfile tarball ret
 
+    check_config
+
     trace "Uploading SRPM"
 
     # HACK: Until copr-cli supports SRPM
-    srpm="$(readlink_or $SRPM)"
+    srpm="$(readpath_or $SRPM)"
     base="$(basename "$srpm")"
 
     user=$(ssh fedorapeople.org -- "mkdir -p public_html && whoami")
@@ -80,7 +100,7 @@ prepare()
 
 commit()
 (
-    if ! copr-cli build --nowait $COPR "$URL"; then
+    if ! copr-cli build $COPR "$URL"; then
         if [ $CONTINUE -eq 0 ]; then
             exit 1
         fi
